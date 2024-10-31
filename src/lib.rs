@@ -78,7 +78,7 @@ async fn handler(
 
     let content_type = headers
         .get("content-type")
-        .and_then(|v| v.to_str().ok().map(Some).flatten())
+        .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
 
     let is_base64_encoded = match content_type {
@@ -132,7 +132,7 @@ async fn handler(
     })
     .to_string();
 
-    let resp = match config.lambda_invoke_mode {
+    match config.lambda_invoke_mode {
         LambdaInvokeMode::Buffered => {
             let resp = client
                 .invoke()
@@ -154,9 +154,7 @@ async fn handler(
                 .unwrap();
             handle_streaming_response(resp).await
         }
-    };
-
-    resp
+    }
 }
 
 fn to_string_map(headers: &HeaderMap) -> HashMap<String, String> {
@@ -275,7 +273,7 @@ async fn handle_streaming_response(
                 } else {
                     Ok(Bytes::default())
                 }
-            },
+            }
             InvokeComplete(_) => Ok(Bytes::default()),
             _ => Ok(Bytes::default()), // Handle other event types
         }
@@ -307,13 +305,11 @@ async fn handle_streaming_response(
 async fn detect_metadata(
     resp: &mut aws_sdk_lambda::operation::invoke_with_response_stream::InvokeWithResponseStreamOutput,
 ) -> (bool, Option<Vec<u8>>) {
-    if let Ok(Some(event)) = resp.event_stream.recv().await {
-        if let PayloadChunk(chunk) = event {
-            if let Some(data) = chunk.payload() {
-                let bytes = data.clone().into_inner();
-                let has_metadata = !bytes.is_empty() && bytes[0] == b'{';
-                return (has_metadata, Some(bytes));
-            }
+    if let Ok(Some(PayloadChunk(chunk))) = resp.event_stream.recv().await {
+        if let Some(data) = chunk.payload() {
+            let bytes = data.clone().into_inner();
+            let has_metadata = !bytes.is_empty() && bytes[0] == b'{';
+            return (has_metadata, Some(bytes));
         }
     }
     (false, None)

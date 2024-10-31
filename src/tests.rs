@@ -31,6 +31,14 @@ fn test_read_config() {
     write!(f, "{}", config).unwrap();
     let path = f.path().to_str().unwrap();
     read_config(path).unwrap();
+
+    // invalid file type
+    env::set_var("AWS_LWG_CONFIG_PATH", "/tmp/invalid.rs");
+    assert_eq!(
+        read_config("").unwrap_err().to_string(),
+        "Unsupported config file format"
+    );
+    env::remove_var("AWS_LWG_CONFIG_PATH");
 }
 
 #[tokio::test]

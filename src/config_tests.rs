@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::env;
 use tempfile::NamedTempFile;
 use std::io::Write;
+use serial_test::serial;
 
 #[test]
 fn test_auth_mode_from_str() {
@@ -40,6 +41,7 @@ fn test_config_panic_on_empty_lambda_function_name() {
 }
 
 #[test]
+#[serial]
 fn test_config_apply_env_overrides() {
     env::set_var("LAMBDA_FUNCTION_NAME", "test-function");
     env::set_var("LAMBDA_INVOKE_MODE", "responsestream");
@@ -89,6 +91,7 @@ addr: 127.0.0.1:3000
 }
 
 #[test]
+#[serial]
 fn test_config_load_with_env_override() {
     let config_content = r#"
 lambda_function_name: file-function
@@ -133,6 +136,7 @@ addr: 0.0.0.0:8000
 }
 
 #[test]
+#[serial]
 fn test_config_load_invalid_file() {
     env::set_var("LAMBDA_FUNCTION_NAME", "env-function");
     env::set_var("AUTH_MODE", "apikey");
@@ -153,6 +157,7 @@ fn test_config_load_invalid_file() {
 }
 
 #[test]
+#[serial]
 fn test_config_load_invalid_yaml() {
     let config_content = "invalid: yaml: content";
 
@@ -178,6 +183,7 @@ fn test_config_load_invalid_yaml() {
 }
 
 #[test]
+#[serial]
 fn test_config_load_empty_api_keys() {
     env::set_var("API_KEYS", "");
     env::set_var("LAMBDA_FUNCTION_NAME", "test-function"); // Add this line

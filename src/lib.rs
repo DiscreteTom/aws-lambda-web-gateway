@@ -40,10 +40,12 @@ pub struct ApplicationState {
 
 pub fn read_config(default_path: &str) -> Result<Config> {
     if let Ok(line) = env::var("AWS_LWG_INLINE_JSON_CONFIG") {
+        tracing::trace!("applying inline json config: {}", line);
         Config::from_json(&line)
     } else {
         let path = env::var("AWS_LWG_CONFIG_PATH");
         let path = path.as_deref().unwrap_or(default_path);
+        tracing::trace!("applying config path: {}", path);
         if path.ends_with(".json") {
             Config::from_json_file(path)
         } else if path.ends_with(".yml") || path.ends_with(".yaml") {
@@ -58,6 +60,7 @@ pub async fn run_app() {
     tracing_subscriber::fmt::init();
 
     let config = read_config("config.yaml").unwrap().validate().unwrap();
+    tracing::debug!("applied config: {:?}", config);
 
     let mut app = Router::new().route("/healthz", get(health));
     for (path, target) in config.targets.into_iter() {

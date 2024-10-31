@@ -1,9 +1,5 @@
-pub mod config;
-
 #[cfg(test)]
-mod tests {
-    include!("lib_tests.rs");
-}
+mod tests;
 
 use crate::config::{Config, LambdaInvokeMode};
 use aws_config::BehaviorVersion;
@@ -29,6 +25,8 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
+
+pub mod config;
 
 #[derive(Clone)]
 pub struct ApplicationState {

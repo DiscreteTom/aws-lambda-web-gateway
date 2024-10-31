@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -69,11 +72,6 @@ impl Config {
         let config: Config = serde_yaml::from_str(&contents)?;
         Ok(config)
     }
-}
-
-#[cfg(test)]
-mod tests {
-    include!("config_tests.rs");
 }
 
 fn default_addr() -> String {

@@ -52,7 +52,7 @@ mod tests {
     static COMPLEX: LazyLock<Config> = LazyLock::new(|| Config {
         bind: SocketAddr::from(([0, 0, 0, 0], 8888)),
         targets: HashMap::from([(
-            "/prefix*".to_string(),
+            "/*wildcard".to_string(),
             Target {
                 function: "arn:aws:lambda:us-east-2:123456789012:function:my-function:version".to_string(),
                 payload: PayloadMode::ALB,
@@ -76,7 +76,7 @@ targets:
         let complex = r"
 bind: 0.0.0.0:8888
 targets:
-    /prefix*:
+    /*wildcard:
         function: arn:aws:lambda:us-east-2:123456789012:function:my-function:version
         payload: alb
         invoke: response_stream
@@ -112,7 +112,7 @@ targets:
 {
   "bind": "0.0.0.0:8888",
   "targets": {
-    "/prefix*": {
+    "/*wildcard": {
       "function": "arn:aws:lambda:us-east-2:123456789012:function:my-function:version",
       "payload": "alb",
       "invoke": "response_stream",

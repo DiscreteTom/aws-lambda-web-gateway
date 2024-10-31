@@ -2,7 +2,7 @@ bind: 0.0.0.0:8000 # optional, default: 0.0.0.0:8000
 
 targets:
   # Path patterns
-  /prefix*:
+  /*wildcard:
     # Lambda function name or ARN (required)
     function: my-function
     # Payload mode (required)

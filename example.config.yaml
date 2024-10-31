@@ -1,0 +1,13 @@
+bind: 0.0.0.0:8000 # optional, default: 0.0.0.0:8000
+
+targets:
+  # Path patterns
+  /prefix*:
+    # Lambda function name or ARN (required)
+    function: my-function
+    # Payload mode (required)
+    payload: alb
+    # Lambda invoke mode: "response_stream" or "buffered" (optional, defaults to "buffered")
+    invoke: response_stream
+    # Authentication mode (optional, defaults to null)
+    auth: !api_keys [key1, key2]

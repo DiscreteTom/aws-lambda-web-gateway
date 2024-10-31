@@ -3,27 +3,29 @@ mod tests;
 
 use crate::config::{Config, LambdaInvokeMode};
 use aws_config::BehaviorVersion;
-use aws_sdk_lambda::types::InvokeWithResponseStreamResponseEvent::{InvokeComplete, PayloadChunk};
-use aws_sdk_lambda::types::{InvokeResponseStreamUpdate, ResponseStreamingInvocationType};
-use aws_sdk_lambda::Client;
+use aws_sdk_lambda::{
+    types::{
+        InvokeResponseStreamUpdate,
+        InvokeWithResponseStreamResponseEvent::{InvokeComplete, PayloadChunk},
+        ResponseStreamingInvocationType,
+    },
+    Client,
+};
 use aws_smithy_types::Blob;
-use axum::body::Body;
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::any,
-    routing::get,
+    routing::{any, get, MethodRouter},
     Router,
 };
 use base64::Engine;
+use config::{AuthMode, PayloadMode, Target};
 use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
@@ -33,28 +35,26 @@ pub mod config;
 #[derive(Clone)]
 pub struct ApplicationState {
     client: Client,
-    config: Arc<Config>,
 }
 
 pub async fn run_app() {
     tracing_subscriber::fmt::init();
 
-    let config = Arc::new(Config::load("config.yaml"));
-    let aws_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-    let client = Client::new(&aws_config);
+    // TODO: customize config provider
+    let config = Config::from_yaml_file("config.yaml").unwrap().validate().unwrap();
 
-    let app_state = ApplicationState { client, config };
-    let addr = app_state.config.addr.parse::<SocketAddr>().unwrap();
+    let mut app = Router::new().route("/healthz", get(health));
+    for (path, target) in config.targets.into_iter() {
+        app = app.route(&path, handler_factory(target));
+    }
+    let app = app.layer(TraceLayer::new_for_http()).with_state({
+        let aws_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        let client = Client::new(&aws_config);
+        ApplicationState { client }
+    });
 
-    let app = Router::new()
-        .route("/healthz", get(health))
-        .route("/", any(handler))
-        .route("/*path", any(handler))
-        .layer(TraceLayer::new_for_http())
-        .with_state(app_state);
-
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    tracing::info!("Listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(&config.bind).await.unwrap();
+    tracing::info!("Listening on {}", config.bind);
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -62,99 +62,104 @@ async fn health() -> impl IntoResponse {
     StatusCode::OK
 }
 
-async fn handler(
-    path: Option<Path<String>>,
-    Query(query_string_parameters): Query<HashMap<String, String>>,
-    State(state): State<ApplicationState>,
-    method: Method,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let client = &state.client;
-    let config = &state.config;
-    let path = "/".to_string() + path.map(|p| p.0).unwrap_or_default().as_str();
+fn handler_factory(target: Target) -> MethodRouter<ApplicationState> {
+    let target = Arc::new(target); // make it cheap to clone
+    any(
+        move |path: Option<Path<String>>,
+              Query(query_string_parameters): Query<HashMap<String, String>>,
+              State(state): State<ApplicationState>,
+              method: Method,
+              headers: HeaderMap,
+              body: Bytes| async move {
+            let client = &state.client;
+            let path = "/".to_string() + path.map(|p| p.0).unwrap_or_default().as_str();
 
-    let http_method = method.to_string();
+            let http_method = method.to_string();
 
-    let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-
-    let is_base64_encoded = match content_type {
-        "application/json" => false,
-        "application/xml" => false,
-        "application/javascript" => false,
-        _ if content_type.starts_with("text/") => false,
-        _ => true,
-    };
-
-    let body = if is_base64_encoded {
-        base64::engine::general_purpose::STANDARD.encode(body)
-    } else {
-        String::from_utf8_lossy(&body).to_string()
-    };
-
-    match config.auth_mode {
-        config::AuthMode::Open => {}
-        config::AuthMode::ApiKey => {
-            let api_key = headers
-                .get("x-api-key")
+            let content_type = headers
+                .get("content-type")
                 .and_then(|v| v.to_str().ok())
-                .or_else(|| {
-                    headers
-                        .get("authorization")
-                        .and_then(|v| v.to_str().ok().and_then(|s| s.strip_prefix("Bearer ")))
-                })
                 .unwrap_or_default();
 
-            if !config.api_keys.contains(api_key) {
-                return Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body(Body::empty())
-                    .unwrap();
+            let is_base64_encoded = match content_type {
+                "application/json" => false,
+                "application/xml" => false,
+                "application/javascript" => false,
+                _ if content_type.starts_with("text/") => false,
+                _ => true,
+            };
+
+            let body = if is_base64_encoded {
+                base64::engine::general_purpose::STANDARD.encode(body)
+            } else {
+                String::from_utf8_lossy(&body).to_string()
+            };
+
+            if let Some(auth) = &target.auth {
+                match auth {
+                    AuthMode::ApiKeys(keys) => {
+                        let api_key = headers
+                            .get("x-api-key")
+                            .and_then(|v| v.to_str().ok())
+                            .or_else(|| {
+                                headers
+                                    .get("authorization")
+                                    .and_then(|v| v.to_str().ok().and_then(|s| s.strip_prefix("Bearer ")))
+                            })
+                            .unwrap_or_default();
+
+                        if !keys.contains(api_key) {
+                            return Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .body(Body::empty())
+                                .unwrap();
+                        }
+                    }
+                }
             }
-        }
-    }
 
-    let lambda_request_body = json!({
-        "httpMethod": http_method,
-        "headers": to_string_map(&headers),
-        "path": path,
-        "queryStringParameters": query_string_parameters,
-        "isBase64Encoded": is_base64_encoded,
-        "body": body,
-        "requestContext": {
-            "elb": {
-                "targetGroupArn": "",
-            },
+            let lambda_request_body = match &target.payload {
+                PayloadMode::ALB => json!({
+                    "httpMethod": http_method,
+                    "headers": to_string_map(&headers),
+                    "path": path,
+                    "queryStringParameters": query_string_parameters,
+                    "isBase64Encoded": is_base64_encoded,
+                    "body": body,
+                    "requestContext": {
+                        "elb": {
+                            "targetGroupArn": "",
+                        },
+                    },
+                }),
+            }
+            .to_string();
+
+            match target.invoke {
+                LambdaInvokeMode::Buffered => {
+                    let resp = client
+                        .invoke()
+                        .function_name(target.function.as_str())
+                        .payload(Blob::new(lambda_request_body))
+                        .send()
+                        .await
+                        .unwrap();
+                    handle_buffered_response(resp).await
+                }
+                LambdaInvokeMode::ResponseStream => {
+                    let resp = client
+                        .invoke_with_response_stream()
+                        .function_name(target.function.as_str())
+                        .invocation_type(ResponseStreamingInvocationType::RequestResponse)
+                        .payload(Blob::new(lambda_request_body))
+                        .send()
+                        .await
+                        .unwrap();
+                    handle_streaming_response(resp).await
+                }
+            }
         },
-    })
-    .to_string();
-
-    match config.lambda_invoke_mode {
-        LambdaInvokeMode::Buffered => {
-            let resp = client
-                .invoke()
-                .function_name(config.lambda_function_name.as_str())
-                .payload(Blob::new(lambda_request_body))
-                .send()
-                .await
-                .unwrap();
-            handle_buffered_response(resp).await
-        }
-        LambdaInvokeMode::ResponseStream => {
-            let resp = client
-                .invoke_with_response_stream()
-                .function_name(config.lambda_function_name.as_str())
-                .invocation_type(ResponseStreamingInvocationType::RequestResponse)
-                .payload(Blob::new(lambda_request_body))
-                .send()
-                .await
-                .unwrap();
-            handle_streaming_response(resp).await
-        }
-    }
+    )
 }
 
 fn to_string_map(headers: &HeaderMap) -> HashMap<String, String> {

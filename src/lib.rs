@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
@@ -32,13 +33,13 @@ pub mod config;
 #[derive(Clone)]
 pub struct ApplicationState {
     client: Client,
-    config: Config,
+    config: Arc<Config>,
 }
 
 pub async fn run_app() {
     tracing_subscriber::fmt::init();
 
-    let config = Config::load("config.yaml");
+    let config = Arc::new(Config::load("config.yaml"));
     let aws_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let client = Client::new(&aws_config);
 

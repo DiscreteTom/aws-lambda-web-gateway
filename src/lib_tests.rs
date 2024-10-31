@@ -32,9 +32,7 @@ async fn test_handle_buffered_response() {
         status_code: 200,
         status_description: Some("OK".to_string()),
         is_base64_encoded: Some(false),
-        headers: Some(HashMap::from([
-            ("Content-Type".to_string(), "text/plain".to_string()),
-        ])),
+        headers: Some(HashMap::from([("Content-Type".to_string(), "text/plain".to_string())])),
         body: "Hello, World!".to_string(),
     };
 
@@ -47,10 +45,7 @@ async fn test_handle_buffered_response() {
     let response = handle_buffered_response(invoke_output).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get("Content-Type").unwrap(),
-        "text/plain"
-    );
+    assert_eq!(response.headers().get("Content-Type").unwrap(), "text/plain");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body, "Hello, World!");
 }

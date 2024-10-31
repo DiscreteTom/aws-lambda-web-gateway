@@ -1,9 +1,9 @@
 use super::*;
+use serial_test::serial;
 use std::collections::HashSet;
 use std::env;
-use tempfile::NamedTempFile;
 use std::io::Write;
-use serial_test::serial;
+use tempfile::NamedTempFile;
 
 #[test]
 fn test_auth_mode_from_str() {
@@ -16,10 +16,22 @@ fn test_auth_mode_from_str() {
 
 #[test]
 fn test_lambda_invoke_mode_from_str() {
-    assert_eq!("buffered".parse::<LambdaInvokeMode>().unwrap(), LambdaInvokeMode::Buffered);
-    assert_eq!("responsestream".parse::<LambdaInvokeMode>().unwrap(), LambdaInvokeMode::ResponseStream);
-    assert_eq!("BUFFERED".parse::<LambdaInvokeMode>().unwrap(), LambdaInvokeMode::Buffered);
-    assert_eq!("RESPONSESTREAM".parse::<LambdaInvokeMode>().unwrap(), LambdaInvokeMode::ResponseStream);
+    assert_eq!(
+        "buffered".parse::<LambdaInvokeMode>().unwrap(),
+        LambdaInvokeMode::Buffered
+    );
+    assert_eq!(
+        "responsestream".parse::<LambdaInvokeMode>().unwrap(),
+        LambdaInvokeMode::ResponseStream
+    );
+    assert_eq!(
+        "BUFFERED".parse::<LambdaInvokeMode>().unwrap(),
+        LambdaInvokeMode::Buffered
+    );
+    assert_eq!(
+        "RESPONSESTREAM".parse::<LambdaInvokeMode>().unwrap(),
+        LambdaInvokeMode::ResponseStream
+    );
     assert!("invalid".parse::<LambdaInvokeMode>().is_err());
 }
 
@@ -54,7 +66,13 @@ fn test_config_apply_env_overrides() {
 
     assert_eq!(config.lambda_function_name, "test-function");
     assert_eq!(config.lambda_invoke_mode, LambdaInvokeMode::ResponseStream);
-    assert_eq!(config.api_keys, vec!["key1", "key2"].into_iter().map(String::from).collect::<HashSet<String>>());
+    assert_eq!(
+        config.api_keys,
+        vec!["key1", "key2"]
+            .into_iter()
+            .map(String::from)
+            .collect::<HashSet<String>>()
+    );
     assert_eq!(config.auth_mode, AuthMode::ApiKey);
     assert_eq!(config.addr, "127.0.0.1:3000");
 
@@ -85,7 +103,13 @@ addr: 127.0.0.1:3000
 
     assert_eq!(config.lambda_function_name, "test-function");
     assert_eq!(config.lambda_invoke_mode, LambdaInvokeMode::ResponseStream);
-    assert_eq!(config.api_keys, vec!["key1", "key2"].into_iter().map(String::from).collect::<HashSet<String>>());
+    assert_eq!(
+        config.api_keys,
+        vec!["key1", "key2"]
+            .into_iter()
+            .map(String::from)
+            .collect::<HashSet<String>>()
+    );
     assert_eq!(config.auth_mode, AuthMode::ApiKey);
     assert_eq!(config.addr, "127.0.0.1:3000");
 }
@@ -114,7 +138,13 @@ addr: 0.0.0.0:8000
 
     assert_eq!(config.lambda_function_name, "env-function");
     assert_eq!(config.lambda_invoke_mode, LambdaInvokeMode::ResponseStream);
-    assert_eq!(config.api_keys, vec!["file-key"].into_iter().map(String::from).collect::<HashSet<String>>());
+    assert_eq!(
+        config.api_keys,
+        vec!["file-key"]
+            .into_iter()
+            .map(String::from)
+            .collect::<HashSet<String>>()
+    );
     assert_eq!(config.auth_mode, AuthMode::ApiKey);
     assert_eq!(config.addr, "0.0.0.0:8000");
 
@@ -143,7 +173,7 @@ fn test_config_load_invalid_file() {
     env::set_var("LAMBDA_INVOKE_MODE", "responsestream");
 
     let config = Config::load("non_existent_file.yaml");
-    
+
     assert_eq!(config.lambda_function_name, "env-function");
     assert_eq!(config.auth_mode, AuthMode::ApiKey);
     assert_eq!(config.lambda_invoke_mode, LambdaInvokeMode::ResponseStream);
@@ -187,9 +217,9 @@ fn test_config_load_invalid_yaml() {
 fn test_config_load_empty_api_keys() {
     env::set_var("API_KEYS", "");
     env::set_var("LAMBDA_FUNCTION_NAME", "test-function"); // Add this line
-    
+
     let config = Config::load("non_existent_file.yaml");
-    
+
     assert!(config.api_keys.is_empty());
 
     env::remove_var("API_KEYS");

@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::config::{Config, LambdaInvokeMode};
+use anyhow::Result;
 use aws_config::BehaviorVersion;
 use aws_sdk_lambda::{
     types::{
@@ -25,7 +26,7 @@ use config::{AuthMode, PayloadMode, Target};
 use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
@@ -37,11 +38,26 @@ pub struct ApplicationState {
     client: Client,
 }
 
+pub fn read_config(default_path: &str) -> Result<Config> {
+    if let Ok(line) = env::var("AWS_LWG_INLINE_JSON_CONFIG") {
+        Config::from_json(&line)
+    } else {
+        let path = env::var("AWS_LWG_CONFIG_PATH");
+        let path = path.as_deref().unwrap_or(default_path);
+        if path.ends_with(".json") {
+            Config::from_json_file(path)
+        } else if path.ends_with(".yml") || path.ends_with(".yaml") {
+            Config::from_yaml_file(path)
+        } else {
+            anyhow::bail!("Unsupported config file format")
+        }
+    }
+}
+
 pub async fn run_app() {
     tracing_subscriber::fmt::init();
 
-    // TODO: customize config provider
-    let config = Config::from_yaml_file("config.yaml").unwrap().validate().unwrap();
+    let config = read_config("config.yaml").unwrap().validate().unwrap();
 
     let mut app = Router::new().route("/healthz", get(health));
     for (path, target) in config.targets.into_iter() {

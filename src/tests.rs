@@ -1,4 +1,7 @@
 use super::*;
+use serial_test::serial;
+use std::io::Write;
+
 // use axum::http::StatusCode;
 // use aws_smithy_types::Blob;
 // use std::collections::HashMap;
@@ -6,6 +9,29 @@ use super::*;
 // use aws_sdk_lambda::operation::invoke_with_response_stream::InvokeWithResponseStreamOutput;
 // use aws_sdk_lambda::primitives::event_stream::EventReceiver;
 // use aws_sdk_lambda::operation::invoke_with_response_stream::InvokeWithResponseStreamError;
+
+#[test]
+#[serial]
+fn test_read_config() {
+    // first try inline json
+    let config = r#"{"targets":{"/hello":{"function":"my-function","payload":"alb"}}}"#;
+    env::set_var("AWS_LWG_INLINE_JSON_CONFIG", config);
+    read_config("").unwrap();
+    env::remove_var("AWS_LWG_INLINE_JSON_CONFIG");
+
+    // if no inline json, try custom file
+    let mut f = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    write!(f, "{}", config).unwrap();
+    env::set_var("AWS_LWG_CONFIG_PATH", f.path().to_str().unwrap());
+    read_config("").unwrap();
+    env::remove_var("AWS_LWG_CONFIG_PATH");
+
+    // otherwise, try default path
+    let mut f = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    write!(f, "{}", config).unwrap();
+    let path = f.path().to_str().unwrap();
+    read_config(path).unwrap();
+}
 
 #[tokio::test]
 async fn test_health() {

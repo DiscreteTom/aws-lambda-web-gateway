@@ -1,6 +1,6 @@
 use super::Config;
 use anyhow::Result;
-use std::{env, fs::File};
+use std::fs::File;
 
 impl Config {
     pub fn from_yaml(yaml: &str) -> Result<Self> {
@@ -18,17 +18,12 @@ impl Config {
     pub fn from_json_file(path: &str) -> Result<Self> {
         Ok(serde_json::from_reader(File::open(path)?)?)
     }
-
-    pub fn from_json_env(name: &str) -> Result<Self> {
-        Ok(serde_json::from_str(&env::var(name)?)?)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{AuthMode, LambdaInvokeMode, PayloadMode, Target};
-    use serial_test::serial;
     use std::{
         collections::{HashMap, HashSet},
         io::Write,
@@ -96,7 +91,6 @@ targets:
     }
 
     #[test]
-    #[serial]
     fn test_json() {
         let simple = r#"
 {
@@ -137,12 +131,5 @@ targets:
         let mut f = NamedTempFile::new().unwrap();
         write!(f, "{}", complex).unwrap();
         assert_eq!(Config::from_json_file(f.path().to_str().unwrap()).unwrap(), *COMPLEX);
-
-        let env_name = "TEST_LWG_CONFIG";
-        env::set_var(env_name, simple.split('\n').collect::<Vec<_>>().join(""));
-        assert_eq!(Config::from_json_env(env_name).unwrap(), *SIMPLE);
-        env::set_var(env_name, complex.split('\n').collect::<Vec<_>>().join(""));
-        assert_eq!(Config::from_json_env(env_name).unwrap(), *COMPLEX);
-        env::remove_var(env_name);
     }
 }

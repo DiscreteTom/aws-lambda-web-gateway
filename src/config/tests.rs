@@ -46,6 +46,7 @@ fn test_config_default() {
 }
 
 #[test]
+#[serial]
 #[should_panic(expected = "No lambda_function_name provided")]
 fn test_config_panic_on_empty_lambda_function_name() {
     let mut config = Config::default();

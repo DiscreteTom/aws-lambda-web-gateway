@@ -22,6 +22,7 @@ use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
@@ -42,15 +43,15 @@ pub async fn run_app() {
     let client = Client::new(&aws_config);
 
     let app_state = ApplicationState { client, config };
+    let addr = app_state.config.addr.parse::<SocketAddr>().unwrap();
 
     let app = Router::new()
         .route("/healthz", get(health))
         .route("/", any(handler))
         .route("/*path", any(handler))
         .layer(TraceLayer::new_for_http())
-        .with_state(app_state.clone());
+        .with_state(app_state);
 
-    let addr = &app_state.config.addr;
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     tracing::info!("Listening on {}", addr);
     axum::serve(listener, app).await.unwrap();

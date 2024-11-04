@@ -14,9 +14,9 @@ use aws_sdk_lambda::{
 };
 use aws_smithy_types::Blob;
 use axum::{
-    body::{Body, Bytes},
-    extract::{Path, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    body::{to_bytes, Body, Bytes},
+    extract::{Query, Request, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{any, get, MethodRouter},
     Router,
@@ -83,102 +83,99 @@ async fn health() -> impl IntoResponse {
 
 fn handler_factory(target: Target) -> MethodRouter<ApplicationState> {
     let target = Arc::new(target); // make it cheap to clone
-    any(
-        move |path: Option<Path<String>>,
-              Query(query_string_parameters): Query<HashMap<String, String>>,
-              State(state): State<ApplicationState>,
-              method: Method,
-              headers: HeaderMap,
-              body: Bytes| async move {
-            let client = &state.client;
-            let path = "/".to_string() + path.map(|p| p.0).unwrap_or_default().as_str();
+    any(move |State(state): State<ApplicationState>, req: Request| async move {
+        let client = &state.client;
 
-            let http_method = method.to_string();
+        let (parts, body) = req.into_parts();
+        let http_method = parts.method.as_str();
+        let headers = parts.headers;
+        let path = parts.uri.path();
+        let Query(query) = Query::<HashMap<String, String>>::try_from_uri(&parts.uri).unwrap();
+        let body = to_bytes(body, usize::MAX).await.unwrap();
 
-            let content_type = headers
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default();
+        let content_type = headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
 
-            let is_base64_encoded = match content_type {
-                "application/json" => false,
-                "application/xml" => false,
-                "application/javascript" => false,
-                _ if content_type.starts_with("text/") => false,
-                _ => true,
-            };
+        let is_base64_encoded = match content_type {
+            "application/json" => false,
+            "application/xml" => false,
+            "application/javascript" => false,
+            _ if content_type.starts_with("text/") => false,
+            _ => true,
+        };
 
-            let body = if is_base64_encoded {
-                base64::engine::general_purpose::STANDARD.encode(body)
-            } else {
-                String::from_utf8_lossy(&body).to_string()
-            };
+        let body = if is_base64_encoded {
+            base64::engine::general_purpose::STANDARD.encode(body)
+        } else {
+            String::from_utf8_lossy(&body).to_string()
+        };
 
-            if let Some(auth) = &target.auth {
-                match auth {
-                    AuthMode::ApiKeys(keys) => {
-                        let api_key = headers
-                            .get("x-api-key")
-                            .and_then(|v| v.to_str().ok())
-                            .or_else(|| {
-                                headers
-                                    .get("authorization")
-                                    .and_then(|v| v.to_str().ok().and_then(|s| s.strip_prefix("Bearer ")))
-                            })
-                            .unwrap_or_default();
+        if let Some(auth) = &target.auth {
+            match auth {
+                AuthMode::ApiKeys(keys) => {
+                    let api_key = headers
+                        .get("x-api-key")
+                        .and_then(|v| v.to_str().ok())
+                        .or_else(|| {
+                            headers
+                                .get("authorization")
+                                .and_then(|v| v.to_str().ok().and_then(|s| s.strip_prefix("Bearer ")))
+                        })
+                        .unwrap_or_default();
 
-                        if !keys.contains(api_key) {
-                            return Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(Body::empty())
-                                .unwrap();
-                        }
+                    if !keys.contains(api_key) {
+                        return Response::builder()
+                            .status(StatusCode::UNAUTHORIZED)
+                            .body(Body::empty())
+                            .unwrap();
                     }
                 }
             }
+        }
 
-            let lambda_request_body = match &target.payload {
-                PayloadMode::ALB => json!({
-                    "httpMethod": http_method,
-                    "headers": to_string_map(&headers),
-                    "path": path,
-                    "queryStringParameters": query_string_parameters,
-                    "isBase64Encoded": is_base64_encoded,
-                    "body": body,
-                    "requestContext": {
-                        "elb": {
-                            "targetGroupArn": "",
-                        },
+        let lambda_request_body = match &target.payload {
+            PayloadMode::ALB => json!({
+                "httpMethod": http_method,
+                "headers": to_string_map(&headers),
+                "path": path,
+                "queryStringParameters": query,
+                "isBase64Encoded": is_base64_encoded,
+                "body": body,
+                "requestContext": {
+                    "elb": {
+                        "targetGroupArn": "",
                     },
-                }),
-            }
-            .to_string();
+                },
+            }),
+        }
+        .to_string();
 
-            match target.invoke {
-                LambdaInvokeMode::Buffered => {
-                    let resp = client
-                        .invoke()
-                        .function_name(target.function.as_str())
-                        .payload(Blob::new(lambda_request_body))
-                        .send()
-                        .await
-                        .unwrap();
-                    handle_buffered_response(resp).await
-                }
-                LambdaInvokeMode::ResponseStream => {
-                    let resp = client
-                        .invoke_with_response_stream()
-                        .function_name(target.function.as_str())
-                        .invocation_type(ResponseStreamingInvocationType::RequestResponse)
-                        .payload(Blob::new(lambda_request_body))
-                        .send()
-                        .await
-                        .unwrap();
-                    handle_streaming_response(resp).await
-                }
+        match target.invoke {
+            LambdaInvokeMode::Buffered => {
+                let resp = client
+                    .invoke()
+                    .function_name(target.function.as_str())
+                    .payload(Blob::new(lambda_request_body))
+                    .send()
+                    .await
+                    .unwrap();
+                handle_buffered_response(resp).await
             }
-        },
-    )
+            LambdaInvokeMode::ResponseStream => {
+                let resp = client
+                    .invoke_with_response_stream()
+                    .function_name(target.function.as_str())
+                    .invocation_type(ResponseStreamingInvocationType::RequestResponse)
+                    .payload(Blob::new(lambda_request_body))
+                    .send()
+                    .await
+                    .unwrap();
+                handle_streaming_response(resp).await
+            }
+        }
+    })
 }
 
 fn to_string_map(headers: &HeaderMap) -> HashMap<String, String> {

@@ -16,7 +16,7 @@ use aws_smithy_types::Blob;
 use axum::{
     body::{to_bytes, Body, Bytes},
     extract::{Query, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{any, get, MethodRouter},
     Router,
@@ -62,7 +62,9 @@ pub async fn run_app() {
     let config = read_config("config.yaml").unwrap().validate().unwrap();
     tracing::debug!("applied config: {:?}", config);
 
-    let mut app = Router::new().route("/healthz", get(health));
+    let mut app = Router::new()
+        .route("/healthz", get(health))
+        .fallback(|uri: Uri| async move { (StatusCode::NOT_FOUND, format!("No route for {uri}")) });
     for (path, target) in config.targets.into_iter() {
         app = app.route(&path, handler_factory(target));
     }

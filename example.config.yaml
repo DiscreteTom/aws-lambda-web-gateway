@@ -1,13 +1,22 @@
 bind: 0.0.0.0:8000 # optional, default: 0.0.0.0:8000
 
 targets:
-  # Path patterns
-  /*wildcard:
+  # Path patterns are regarding to https://docs.rs/axum/0.7.5/axum/struct.Router.html#method.route
+  # Static path
+  /foo:
     # Lambda function name or ARN (required)
-    function: my-function
+    function: my-function-1
     # Payload mode (required)
     payload: alb
     # Lambda invoke mode: "response_stream" or "buffered" (optional, defaults to "buffered")
     invoke: response_stream
     # Authentication mode (optional, defaults to null)
     auth: !api_keys [key1, key2]
+  # Parameterized path
+  /users/:id/tweets:
+    function: my-function-2
+    payload: alb
+  # Wildcard path
+  /assets/*path:
+    function: my-function-3
+    payload: alb

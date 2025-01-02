@@ -2,28 +2,31 @@ pub mod config;
 
 use crate::config::{Config, LambdaInvokeMode};
 use aws_config::BehaviorVersion;
-use aws_sdk_lambda::types::InvokeWithResponseStreamResponseEvent::{InvokeComplete, PayloadChunk};
-use aws_sdk_lambda::types::{InvokeResponseStreamUpdate, ResponseStreamingInvocationType};
-use aws_sdk_lambda::Client;
+use aws_sdk_lambda::{
+    operation::{invoke::InvokeOutput, invoke_with_response_stream::InvokeWithResponseStreamOutput},
+    types::{
+        InvokeResponseStreamUpdate,
+        InvokeWithResponseStreamResponseEvent::{InvokeComplete, PayloadChunk},
+        ResponseStreamingInvocationType,
+    },
+    Client,
+};
 use aws_smithy_types::Blob;
-use axum::body::Body;
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::any,
-    routing::get,
+    routing::{any, get},
     Router,
 };
-use base64::Engine;
+use base64::{prelude::BASE64_STANDARD, Engine};
+use config::AuthMode;
 use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
+use tokio::{net::TcpListener, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
 
@@ -50,7 +53,7 @@ pub async fn run_app() {
         .layer(TraceLayer::new_for_http())
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap();
     tracing::info!("Listening on {}", addr);
     axum::serve(listener, app).await.unwrap();
 }
@@ -87,14 +90,14 @@ async fn handler(
     };
 
     let body = if is_base64_encoded {
-        base64::engine::general_purpose::STANDARD.encode(body)
+        BASE64_STANDARD.encode(body)
     } else {
         String::from_utf8_lossy(&body).to_string()
     };
 
     match config.auth_mode {
-        config::AuthMode::Open => {}
-        config::AuthMode::ApiKey => {
+        AuthMode::Open => {}
+        AuthMode::ApiKey => {
             let api_key = headers
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
@@ -189,7 +192,7 @@ struct MetadataPrelude {
     pub cookies: Vec<String>,
 }
 
-async fn handle_buffered_response(resp: aws_sdk_lambda::operation::invoke::InvokeOutput) -> Response {
+async fn handle_buffered_response(resp: InvokeOutput) -> Response {
     // Parse the InvokeOutput payload to extract the LambdaResponse
     let payload = resp.payload().unwrap().as_ref().to_vec();
     let lambda_response: LambdaResponse = serde_json::from_slice(&payload).unwrap();
@@ -204,18 +207,14 @@ async fn handle_buffered_response(resp: aws_sdk_lambda::operation::invoke::Invok
     }
 
     let body = if lambda_response.is_base64_encoded.unwrap_or(false) {
-        base64::engine::general_purpose::STANDARD
-            .decode(lambda_response.body)
-            .unwrap()
+        BASE64_STANDARD.decode(lambda_response.body).unwrap()
     } else {
         lambda_response.body.into_bytes()
     };
     resp_builder.body(Body::from(body)).unwrap()
 }
 
-async fn handle_streaming_response(
-    mut resp: aws_sdk_lambda::operation::invoke_with_response_stream::InvokeWithResponseStreamOutput,
-) -> Response {
+async fn handle_streaming_response(mut resp: InvokeWithResponseStreamOutput) -> Response {
     let (tx, rx) = mpsc::channel(1);
     let mut metadata_buffer = Vec::new();
     let mut metadata_prelude: Option<MetadataPrelude> = None;
@@ -266,7 +265,7 @@ async fn handle_streaming_response(
             PayloadChunk(chunk) => {
                 if let Some(data) = chunk.payload() {
                     let bytes = data.clone().into_inner();
-                    Ok::<_, std::convert::Infallible>(Bytes::from(bytes))
+                    Ok::<_, Infallible>(Bytes::from(bytes))
                 } else {
                     Ok(Bytes::default())
                 }
@@ -299,9 +298,7 @@ async fn handle_streaming_response(
     resp_builder.body(Body::from_stream(stream)).unwrap()
 }
 
-async fn detect_metadata(
-    resp: &mut aws_sdk_lambda::operation::invoke_with_response_stream::InvokeWithResponseStreamOutput,
-) -> (bool, Option<Vec<u8>>) {
+async fn detect_metadata(resp: &mut InvokeWithResponseStreamOutput) -> (bool, Option<Vec<u8>>) {
     if let Ok(Some(PayloadChunk(chunk))) = resp.event_stream.recv().await {
         if let Some(data) = chunk.payload() {
             let bytes = data.clone().into_inner();
@@ -313,7 +310,7 @@ async fn detect_metadata(
 }
 
 async fn collect_metadata(
-    resp: &mut aws_sdk_lambda::operation::invoke_with_response_stream::InvokeWithResponseStreamOutput,
+    resp: &mut InvokeWithResponseStreamOutput,
     metadata_buffer: &mut Vec<u8>,
 ) -> (Option<MetadataPrelude>, Vec<u8>) {
     let mut metadata_prelude = None;

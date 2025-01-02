@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::fs;
-use std::path::Path;
-use std::str::FromStr;
+use std::{collections::HashSet, env, fs, path::Path, str::FromStr};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -40,26 +37,26 @@ impl Config {
     }
 
     fn apply_env_overrides(&mut self) {
-        if let Ok(val) = std::env::var("LAMBDA_FUNCTION_NAME") {
+        if let Ok(val) = env::var("LAMBDA_FUNCTION_NAME") {
             self.lambda_function_name = val;
         }
         if self.lambda_function_name.is_empty() {
             panic!("No lambda_function_name provided. Please set it in the config file or LAMBDA_FUNCTION_NAME environment variable.");
         }
-        if let Ok(val) = std::env::var("LAMBDA_INVOKE_MODE") {
+        if let Ok(val) = env::var("LAMBDA_INVOKE_MODE") {
             if let Ok(mode) = val.parse() {
                 self.lambda_invoke_mode = mode;
             }
         }
-        if let Ok(val) = std::env::var("API_KEYS") {
+        if let Ok(val) = env::var("API_KEYS") {
             self.api_keys = val.split(',').filter(|s| !s.is_empty()).map(String::from).collect();
         }
-        if let Ok(val) = std::env::var("AUTH_MODE") {
+        if let Ok(val) = env::var("AUTH_MODE") {
             if let Ok(mode) = val.parse() {
                 self.auth_mode = mode;
             }
         }
-        if let Ok(val) = std::env::var("ADDR") {
+        if let Ok(val) = env::var("ADDR") {
             self.addr = val;
         }
     }

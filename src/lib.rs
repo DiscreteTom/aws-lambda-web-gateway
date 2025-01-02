@@ -62,6 +62,21 @@ async fn health() -> impl IntoResponse {
     StatusCode::OK
 }
 
+macro_rules! handle_err {
+    ($name:expr, $result:expr) => {{
+        match $result {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("{}: {:?}", $name, e);
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+        }
+    }};
+}
+
 async fn handler(
     path: Option<Path<String>>,
     Query(query_string_parameters): Query<HashMap<String, String>>,
@@ -134,24 +149,28 @@ async fn handler(
 
     match config.lambda_invoke_mode {
         LambdaInvokeMode::Buffered => {
-            let resp = client
-                .invoke()
-                .function_name(config.lambda_function_name.as_str())
-                .payload(Blob::new(lambda_request_body))
-                .send()
-                .await
-                .unwrap();
+            let resp = handle_err!(
+                "Invoking lambda",
+                client
+                    .invoke()
+                    .function_name(config.lambda_function_name.as_str())
+                    .payload(Blob::new(lambda_request_body))
+                    .send()
+                    .await
+            );
             handle_buffered_response(resp).await
         }
         LambdaInvokeMode::ResponseStream => {
-            let resp = client
-                .invoke_with_response_stream()
-                .function_name(config.lambda_function_name.as_str())
-                .invocation_type(ResponseStreamingInvocationType::RequestResponse)
-                .payload(Blob::new(lambda_request_body))
-                .send()
-                .await
-                .unwrap();
+            let resp = handle_err!(
+                "Invoking lambda",
+                client
+                    .invoke_with_response_stream()
+                    .function_name(config.lambda_function_name.as_str())
+                    .invocation_type(ResponseStreamingInvocationType::RequestResponse)
+                    .payload(Blob::new(lambda_request_body))
+                    .send()
+                    .await
+            );
             handle_streaming_response(resp).await
         }
     }
@@ -194,8 +213,11 @@ struct MetadataPrelude {
 
 async fn handle_buffered_response(resp: InvokeOutput) -> Response {
     // Parse the InvokeOutput payload to extract the LambdaResponse
-    let payload = resp.payload().unwrap().as_ref().to_vec();
-    let lambda_response: LambdaResponse = serde_json::from_slice(&payload).unwrap();
+    let payload = resp.payload().map_or(&[] as &[u8], |v| v.as_ref());
+    let lambda_response = handle_err!(
+        "Deserializing lambda response",
+        serde_json::from_slice::<LambdaResponse>(payload)
+    );
 
     // Build the response using the extracted information
     let mut resp_builder = Response::builder().status(StatusCode::from_u16(lambda_response.status_code).unwrap());
@@ -207,11 +229,14 @@ async fn handle_buffered_response(resp: InvokeOutput) -> Response {
     }
 
     let body = if lambda_response.is_base64_encoded.unwrap_or(false) {
-        BASE64_STANDARD.decode(lambda_response.body).unwrap()
+        handle_err!(
+            "Decode base64 lambda response body",
+            BASE64_STANDARD.decode(lambda_response.body)
+        )
     } else {
         lambda_response.body.into_bytes()
     };
-    resp_builder.body(Body::from(body)).unwrap()
+    handle_err!("Building response", resp_builder.body(Body::from(body)))
 }
 
 async fn handle_streaming_response(mut resp: InvokeWithResponseStreamOutput) -> Response {
@@ -244,34 +269,24 @@ async fn handle_streaming_response(mut resp: InvokeWithResponseStreamOutput) -> 
             let _ = tx.send(PayloadChunk(stream_update)).await;
         }
 
-        while let Some(event) = resp.event_stream.recv().await.unwrap() {
-            match event {
-                PayloadChunk(chunk) => {
-                    if let Some(data) = chunk.payload() {
-                        let stream_update = InvokeResponseStreamUpdate::builder().payload(data.clone()).build();
-                        let _ = tx.send(PayloadChunk(stream_update)).await;
-                    }
-                }
-                InvokeComplete(_) => {
-                    let _ = tx.send(event).await;
-                }
-                _ => {}
-            }
+        while let Ok(Some(event)) = resp.event_stream.recv().await {
+            tx.send(event).await.ok();
         }
     });
 
-    let stream = ReceiverStream::new(rx).map(|event| {
-        match event {
-            PayloadChunk(chunk) => {
-                if let Some(data) = chunk.payload() {
-                    let bytes = data.clone().into_inner();
-                    Ok::<_, Infallible>(Bytes::from(bytes))
-                } else {
-                    Ok(Bytes::default())
-                }
+    let stream = ReceiverStream::new(rx).map(|event| match event {
+        PayloadChunk(chunk) => {
+            if let Some(data) = chunk.payload {
+                let bytes = data.into_inner();
+                Ok::<_, Infallible>(Bytes::from(bytes))
+            } else {
+                Ok(Bytes::default())
             }
-            InvokeComplete(_) => Ok(Bytes::default()),
-            _ => Ok(Bytes::default()), // Handle other event types
+        }
+        InvokeComplete(_) => Ok(Bytes::default()),
+        _ => {
+            tracing::warn!("Unhandled event type: {:?}", event);
+            Ok(Bytes::default())
         }
     });
 
@@ -295,13 +310,13 @@ async fn handle_streaming_response(mut resp: InvokeWithResponseStreamOutput) -> 
         resp_builder = resp_builder.header("content-type", "application/octet-stream");
     }
 
-    resp_builder.body(Body::from_stream(stream)).unwrap()
+    handle_err!("Building response", resp_builder.body(Body::from_stream(stream)))
 }
 
 async fn detect_metadata(resp: &mut InvokeWithResponseStreamOutput) -> (bool, Option<Vec<u8>>) {
     if let Ok(Some(PayloadChunk(chunk))) = resp.event_stream.recv().await {
-        if let Some(data) = chunk.payload() {
-            let bytes = data.clone().into_inner();
+        if let Some(data) = chunk.payload {
+            let bytes = data.into_inner();
             let has_metadata = !bytes.is_empty() && bytes[0] == b'{';
             return (has_metadata, Some(bytes));
         }
@@ -325,8 +340,8 @@ async fn collect_metadata(
     // If metadata is not complete, continue processing the stream
     while let Ok(Some(event)) = resp.event_stream.recv().await {
         if let PayloadChunk(chunk) = event {
-            if let Some(data) = chunk.payload() {
-                let bytes = data.clone().into_inner();
+            if let Some(data) = chunk.payload {
+                let bytes = data.into_inner();
                 metadata_buffer.extend_from_slice(&bytes);
                 let (prelude, remaining) = process_buffer(metadata_buffer);
                 if let Some(p) = prelude {

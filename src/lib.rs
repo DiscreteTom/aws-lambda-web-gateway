@@ -1,5 +1,4 @@
-#[cfg(test)]
-mod tests;
+pub mod config;
 
 use crate::config::{Config, LambdaInvokeMode};
 use aws_config::BehaviorVersion;
@@ -27,8 +26,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::trace::TraceLayer;
-
-pub mod config;
 
 #[derive(Clone)]
 pub struct ApplicationState {
@@ -365,3 +362,6 @@ fn process_buffer(buffer: &[u8]) -> (Option<MetadataPrelude>, Vec<u8>) {
     }
     (None, Vec::new())
 }
+
+#[cfg(test)]
+mod tests;

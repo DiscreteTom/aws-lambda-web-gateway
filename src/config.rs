@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod tests;
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -115,3 +112,6 @@ impl FromStr for LambdaInvokeMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

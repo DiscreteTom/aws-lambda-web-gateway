@@ -4,6 +4,10 @@ mod utils;
 
 use crate::config::{Config, LambdaInvokeMode};
 use aws_config::BehaviorVersion;
+use aws_lambda_events::{
+    alb::{AlbTargetGroupRequest, AlbTargetGroupRequestContext, AlbTargetGroupResponse, ElbContext},
+    query_map::QueryMap,
+};
 use aws_sdk_lambda::{operation::invoke::InvokeOutput, types::ResponseStreamingInvocationType, Client};
 use aws_smithy_types::Blob;
 use axum::{
@@ -16,9 +20,7 @@ use axum::{
 };
 use base64::{prelude::BASE64_STANDARD, Engine};
 use config::AuthMode;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 use streaming::handle_streaming_response;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -58,17 +60,15 @@ async fn health() -> impl IntoResponse {
 
 async fn handler(
     path: Option<Path<String>>,
-    Query(query_string_parameters): Query<HashMap<String, String>>,
+    Query(query_string_parameters): Query<QueryMap>,
     State(state): State<ApplicationState>,
-    method: Method,
+    http_method: Method,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let client = &state.client;
     let config = &state.config;
     let path = "/".to_string() + path.map(|p| p.0).unwrap_or_default().as_str();
-
-    let http_method = method.to_string();
 
     let content_type = headers
         .get("content-type")
@@ -111,20 +111,24 @@ async fn handler(
         }
     }
 
-    let lambda_request_body = json!({
-        "httpMethod": http_method,
-        "headers": to_string_map(&headers),
-        "path": path,
-        "queryStringParameters": query_string_parameters,
-        "isBase64Encoded": is_base64_encoded,
-        "body": body,
-        "requestContext": {
-            "elb": {
-                "targetGroupArn": "",
+    let lambda_request_body = handle_err!(
+        "Building lambda request",
+        serde_json::to_string(&AlbTargetGroupRequest {
+            http_method,
+            headers,
+            path: path.into(),
+            query_string_parameters,
+            body: body.into(),
+            is_base64_encoded,
+            request_context: AlbTargetGroupRequestContext {
+                elb: ElbContext { target_group_arn: None },
             },
-        },
-    })
-    .to_string();
+            // TODO: remove these?
+            // https://github.com/awslabs/aws-lambda-rust-runtime/issues/953
+            multi_value_headers: Default::default(),
+            multi_value_query_string_parameters: Default::default(),
+        })
+    );
 
     match config.lambda_invoke_mode {
         LambdaInvokeMode::Buffered => {
@@ -155,53 +159,32 @@ async fn handler(
     }
 }
 
-fn to_string_map(headers: &HeaderMap) -> HashMap<String, String> {
-    headers
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.as_str().to_owned(),
-                String::from_utf8_lossy(v.as_bytes()).into_owned(),
-            )
-        })
-        .collect()
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct LambdaResponse {
-    status_code: u16,
-    status_description: Option<String>,
-    is_base64_encoded: Option<bool>,
-    headers: Option<HashMap<String, String>>,
-    body: String,
-}
-
 async fn handle_buffered_response(resp: InvokeOutput) -> Response {
     // Parse the InvokeOutput payload to extract the LambdaResponse
     let payload = resp.payload().map_or(&[] as &[u8], |v| v.as_ref());
     let lambda_response = handle_err!(
         "Deserializing lambda response",
-        serde_json::from_slice::<LambdaResponse>(payload)
+        serde_json::from_slice::<AlbTargetGroupResponse>(payload)
     );
 
     // Build the response using the extracted information
-    let mut resp_builder = Response::builder().status(StatusCode::from_u16(lambda_response.status_code).unwrap());
+    let mut resp_builder = Response::builder().status(handle_err!(
+        "Parse response status code",
+        StatusCode::from_u16(handle_err!(
+            "Parse response status code",
+            lambda_response.status_code.try_into()
+        ))
+    ));
 
-    if let Some(headers) = lambda_response.headers {
-        for (key, value) in headers {
-            resp_builder = resp_builder.header(key, value);
-        }
+    *handle_err!(
+        "Setting response headers",
+        resp_builder.headers_mut().ok_or("Errors in builder")
+    ) = lambda_response.headers;
+
+    let mut body = lambda_response.body.map_or(vec![], |b| b.to_vec());
+    if lambda_response.is_base64_encoded {
+        body = handle_err!("Decoding base64 body", BASE64_STANDARD.decode(body));
     }
-
-    let body = if lambda_response.is_base64_encoded.unwrap_or(false) {
-        handle_err!(
-            "Decode base64 lambda response body",
-            BASE64_STANDARD.decode(lambda_response.body)
-        )
-    } else {
-        lambda_response.body.into_bytes()
-    };
     handle_err!("Building response", resp_builder.body(Body::from(body)))
 }
 

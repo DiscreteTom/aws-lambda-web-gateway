@@ -1,30 +1,31 @@
+mod auth;
+mod buffered;
 mod config;
+mod request;
 mod streaming;
 mod utils;
 
 use crate::config::{Config, LambdaInvokeMode};
+use auth::is_authorized;
 use aws_config::BehaviorVersion;
-use aws_lambda_events::{
-    alb::{AlbTargetGroupRequest, AlbTargetGroupRequestContext, AlbTargetGroupResponse, ElbContext},
-    query_map::QueryMap,
-};
-use aws_sdk_lambda::{operation::invoke::InvokeOutput, Client};
+use aws_lambda_events::query_map::QueryMap;
+use aws_sdk_lambda::Client;
 use aws_smithy_types::Blob;
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, Query, State},
-    http::{HeaderMap, Method, StatusCode},
+    extract::{Query, State},
+    http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
     routing::{any, get},
     Router,
 };
-use base64::{prelude::BASE64_STANDARD, Engine};
-use config::AuthMode;
+use buffered::handle_buffered_response;
+use request::build_alb_request_body;
 use std::{net::SocketAddr, sync::Arc};
 use streaming::handle_streaming_response;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
-use utils::handle_err;
+use utils::{handle_err, transform_body, whether_base64_encoded};
 
 #[derive(Clone)]
 pub struct ApplicationState {
@@ -59,131 +60,42 @@ async fn health() -> impl IntoResponse {
 }
 
 async fn handler(
-    path: Option<Path<String>>,
-    Query(query_string_parameters): Query<QueryMap>,
     State(state): State<ApplicationState>,
-    http_method: Method,
-    headers: HeaderMap,
+    Query(query): Query<QueryMap>,
+    parts: Parts,
     body: Bytes,
 ) -> Response {
-    let client = &state.client;
-    let config = &state.config;
-    let path = "/".to_string() + path.map(|p| p.0).unwrap_or_default().as_str();
-
-    let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-
-    let is_base64_encoded = match content_type {
-        "application/json" => false,
-        "application/xml" => false,
-        "application/javascript" => false,
-        _ if content_type.starts_with("text/") => false,
-        _ => true,
-    };
-
-    let body = if is_base64_encoded {
-        BASE64_STANDARD.encode(body)
-    } else {
-        String::from_utf8_lossy(&body).to_string()
-    };
-
-    match config.auth_mode {
-        AuthMode::Open => {}
-        AuthMode::ApiKey => {
-            let api_key = headers
-                .get("x-api-key")
-                .and_then(|v| v.to_str().ok())
-                .or_else(|| {
-                    headers
-                        .get("authorization")
-                        .and_then(|v| v.to_str().ok().and_then(|s| s.strip_prefix("Bearer ")))
-                })
-                .unwrap_or_default();
-
-            if !config.api_keys.contains(api_key) {
-                return Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body(Body::empty())
-                    .unwrap();
-            }
-        }
+    if !is_authorized(&parts.headers, &state.config) {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
+
+    let is_base64_encoded = whether_base64_encoded(&parts.headers);
+    let body = transform_body(is_base64_encoded, body);
 
     let lambda_request_body = handle_err!(
         "Building lambda request",
-        serde_json::to_string(&AlbTargetGroupRequest {
-            http_method,
-            headers,
-            path: path.into(),
-            query_string_parameters,
-            body: body.into(),
-            is_base64_encoded,
-            request_context: AlbTargetGroupRequestContext {
-                elb: ElbContext { target_group_arn: None },
-            },
-            // TODO: support multi-value-header mode?
-            multi_value_headers: Default::default(),
-            multi_value_query_string_parameters: Default::default(),
-        })
+        build_alb_request_body(is_base64_encoded, query, parts, body)
     );
 
-    match config.lambda_invoke_mode {
-        LambdaInvokeMode::Buffered => {
-            let resp = handle_err!(
+    macro_rules! call_lambda {
+        ($action:ident) => {
+            handle_err!(
                 "Invoking lambda",
-                client
-                    .invoke()
-                    .function_name(config.lambda_function_name.as_str())
+                state
+                    .client
+                    .$action()
+                    .function_name(state.config.lambda_function_name.as_str())
                     .payload(Blob::new(lambda_request_body))
                     .send()
                     .await
-            );
-            handle_buffered_response(resp).await
-        }
-        LambdaInvokeMode::ResponseStream => {
-            let resp = handle_err!(
-                "Invoking lambda",
-                client
-                    .invoke_with_response_stream()
-                    .function_name(config.lambda_function_name.as_str())
-                    .payload(Blob::new(lambda_request_body))
-                    .send()
-                    .await
-            );
-            handle_streaming_response(resp).await
-        }
+            )
+        };
     }
-}
 
-async fn handle_buffered_response(resp: InvokeOutput) -> Response {
-    // Parse the InvokeOutput payload to extract the LambdaResponse
-    let payload = resp.payload().map_or(&[] as &[u8], |v| v.as_ref());
-    let lambda_response = handle_err!(
-        "Deserializing lambda response",
-        serde_json::from_slice::<AlbTargetGroupResponse>(payload)
-    );
-
-    // Build the response using the extracted information
-    let mut resp_builder = Response::builder().status(handle_err!(
-        "Parse response status code",
-        StatusCode::from_u16(handle_err!(
-            "Parse response status code",
-            lambda_response.status_code.try_into()
-        ))
-    ));
-
-    *handle_err!(
-        "Setting response headers",
-        resp_builder.headers_mut().ok_or("Errors in builder")
-    ) = lambda_response.headers;
-
-    let mut body = lambda_response.body.map_or(vec![], |b| b.to_vec());
-    if lambda_response.is_base64_encoded {
-        body = handle_err!("Decoding base64 body", BASE64_STANDARD.decode(body));
+    match state.config.lambda_invoke_mode {
+        LambdaInvokeMode::Buffered => handle_buffered_response(call_lambda!(invoke)).await,
+        LambdaInvokeMode::ResponseStream => handle_streaming_response(call_lambda!(invoke_with_response_stream)).await,
     }
-    handle_err!("Building response", resp_builder.body(Body::from(body)))
 }
 
 #[cfg(test)]

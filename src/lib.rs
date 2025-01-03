@@ -8,7 +8,7 @@ use aws_lambda_events::{
     alb::{AlbTargetGroupRequest, AlbTargetGroupRequestContext, AlbTargetGroupResponse, ElbContext},
     query_map::QueryMap,
 };
-use aws_sdk_lambda::{operation::invoke::InvokeOutput, types::ResponseStreamingInvocationType, Client};
+use aws_sdk_lambda::{operation::invoke::InvokeOutput, Client};
 use aws_smithy_types::Blob;
 use axum::{
     body::{Body, Bytes},
@@ -148,7 +148,6 @@ async fn handler(
                 client
                     .invoke_with_response_stream()
                     .function_name(config.lambda_function_name.as_str())
-                    .invocation_type(ResponseStreamingInvocationType::RequestResponse)
                     .payload(Blob::new(lambda_request_body))
                     .send()
                     .await

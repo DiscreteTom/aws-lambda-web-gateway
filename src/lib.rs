@@ -123,8 +123,7 @@ async fn handler(
             request_context: AlbTargetGroupRequestContext {
                 elb: ElbContext { target_group_arn: None },
             },
-            // TODO: remove these?
-            // https://github.com/awslabs/aws-lambda-rust-runtime/issues/953
+            // TODO: support multi-value-header mode?
             multi_value_headers: Default::default(),
             multi_value_query_string_parameters: Default::default(),
         })

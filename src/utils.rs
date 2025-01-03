@@ -40,3 +40,36 @@ pub(super) fn transform_body(should_base64_encode: bool, body: Bytes) -> String 
         String::from_utf8_lossy(&body).to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_whether_base64_encoded() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        assert!(!whether_should_base64_encode(&headers));
+
+        headers.insert("content-type", "application/xml".parse().unwrap());
+        assert!(!whether_should_base64_encode(&headers));
+
+        headers.insert("content-type", "application/javascript".parse().unwrap());
+        assert!(!whether_should_base64_encode(&headers));
+
+        headers.insert("content-type", "text/html".parse().unwrap());
+        assert!(!whether_should_base64_encode(&headers));
+
+        headers.insert("content-type", "image/png".parse().unwrap());
+        assert!(whether_should_base64_encode(&headers));
+    }
+
+    #[test]
+    fn test_transform_body() {
+        let body = Bytes::from("Hello, world!");
+        assert_eq!(transform_body(false, body.clone()), "Hello, world!");
+
+        let base64_body = Bytes::from(BASE64_STANDARD.encode(&body));
+        assert_eq!(transform_body(true, base64_body), body);
+    }
+}

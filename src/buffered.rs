@@ -32,3 +32,60 @@ pub(super) fn handle_buffered_response(resp: InvokeOutput) -> Response {
     }
     handle_err!("Building response", resp_builder.body(Body::from(body)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_smithy_types::Blob;
+    use axum::http::HeaderMap;
+
+    #[tokio::test]
+    async fn test_handle_buffered_response() {
+        let lambda_response = AlbTargetGroupResponse {
+            status_code: 200,
+            status_description: None,
+            is_base64_encoded: false,
+            headers: {
+                let mut headers = HeaderMap::new();
+                headers.insert("Content-Type", "text/plain".parse().unwrap());
+                headers
+            },
+            body: Some("Hello, world!".into()),
+            ..Default::default()
+        };
+        let payload = serde_json::to_vec(&lambda_response).unwrap();
+        let invoke_output = InvokeOutput::builder().payload(Blob::new(payload)).build();
+
+        let response = handle_buffered_response(invoke_output);
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("Content-Type").unwrap(), "text/plain");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body, "Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_handle_buffered_response_base64() {
+        let lambda_response = AlbTargetGroupResponse {
+            status_code: 200,
+            status_description: None,
+            is_base64_encoded: true,
+            headers: {
+                let mut headers = HeaderMap::new();
+                headers.insert("Content-Type", "text/plain".parse().unwrap());
+                headers
+            },
+            body: Some("SGVsbG8sIHdvcmxkIQ==".into()),
+            ..Default::default()
+        };
+        let payload = serde_json::to_vec(&lambda_response).unwrap();
+        let invoke_output = InvokeOutput::builder().payload(Blob::new(payload)).build();
+
+        let response = handle_buffered_response(invoke_output);
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("Content-Type").unwrap(), "text/plain");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body, "Hello, world!");
+    }
+}

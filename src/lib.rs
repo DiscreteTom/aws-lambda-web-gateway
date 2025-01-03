@@ -73,4 +73,12 @@ pub async fn invoke_lambda(
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_health() {
+        let response = health().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}

@@ -67,7 +67,7 @@ pub async fn invoke_lambda(
     }
 
     match state.config.lambda_invoke_mode {
-        LambdaInvokeMode::Buffered => handle_buffered_response(call_lambda!(invoke)).await,
+        LambdaInvokeMode::Buffered => handle_buffered_response(call_lambda!(invoke)),
         LambdaInvokeMode::ResponseStream => handle_streaming_response(call_lambda!(invoke_with_response_stream)).await,
     }
 }

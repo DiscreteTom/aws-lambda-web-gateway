@@ -4,7 +4,7 @@ use aws_sdk_lambda::operation::invoke::InvokeOutput;
 use axum::{body::Body, http::StatusCode, response::Response};
 use base64::{prelude::BASE64_STANDARD, Engine};
 
-pub(super) async fn handle_buffered_response(resp: InvokeOutput) -> Response {
+pub(super) fn handle_buffered_response(resp: InvokeOutput) -> Response {
     // Parse the InvokeOutput payload to extract the LambdaResponse
     let payload = resp.payload().map_or(&[] as &[u8], |v| v.as_ref());
     let lambda_response = handle_err!(

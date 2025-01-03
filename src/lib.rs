@@ -5,9 +5,9 @@ mod request;
 mod streaming;
 mod utils;
 
-use crate::config::{Config, LambdaInvokeMode};
+pub use config::*;
+
 use auth::is_authorized;
-use aws_config::BehaviorVersion;
 use aws_lambda_events::query_map::QueryMap;
 use aws_sdk_lambda::Client;
 use aws_smithy_types::Blob;
@@ -16,50 +16,24 @@ use axum::{
     extract::{Query, State},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
-    routing::{any, get},
-    Router,
 };
 use buffered::handle_buffered_response;
 use request::build_alb_request_body;
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 use streaming::handle_streaming_response;
-use tokio::net::TcpListener;
-use tower_http::trace::TraceLayer;
 use utils::{handle_err, transform_body, whether_base64_encoded};
 
 #[derive(Clone)]
 pub struct ApplicationState {
-    client: Client,
-    config: Arc<Config>,
+    pub client: Client,
+    pub config: Arc<Config>,
 }
 
-pub async fn run_app() {
-    tracing_subscriber::fmt::init();
-
-    let config = Arc::new(Config::load("config.yaml"));
-    let aws_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
-    let client = Client::new(&aws_config);
-
-    let app_state = ApplicationState { client, config };
-    let addr = app_state.config.addr.parse::<SocketAddr>().unwrap();
-
-    let app = Router::new()
-        .route("/healthz", get(health))
-        .route("/", any(handler))
-        .route("/*path", any(handler))
-        .layer(TraceLayer::new_for_http())
-        .with_state(app_state);
-
-    let listener = TcpListener::bind(addr).await.unwrap();
-    tracing::info!("Listening on {}", addr);
-    axum::serve(listener, app).await.unwrap();
-}
-
-async fn health() -> impl IntoResponse {
+pub async fn health() -> impl IntoResponse {
     StatusCode::OK
 }
 
-async fn handler(
+pub async fn invoke_lambda(
     State(state): State<ApplicationState>,
     Query(query): Query<QueryMap>,
     parts: Parts,

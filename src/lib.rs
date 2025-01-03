@@ -21,7 +21,7 @@ use buffered::handle_buffered_response;
 use request::build_alb_request_body;
 use std::sync::Arc;
 use streaming::handle_streaming_response;
-use utils::{handle_err, transform_body, whether_base64_encoded};
+use utils::{handle_err, transform_body, whether_should_base64_encode};
 
 #[derive(Clone)]
 pub struct ApplicationState {
@@ -43,12 +43,12 @@ pub async fn invoke_lambda(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let is_base64_encoded = whether_base64_encoded(&parts.headers);
-    let body = transform_body(is_base64_encoded, body);
+    let should_base64_encode = whether_should_base64_encode(&parts.headers);
+    let body = transform_body(should_base64_encode, body);
 
     let lambda_request_body = handle_err!(
         "Building lambda request",
-        build_alb_request_body(is_base64_encoded, query, parts, body)
+        build_alb_request_body(should_base64_encode, query, parts, body)
     );
 
     macro_rules! call_lambda {

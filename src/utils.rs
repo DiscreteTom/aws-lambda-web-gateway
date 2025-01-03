@@ -18,7 +18,7 @@ macro_rules! handle_err {
 }
 pub(crate) use handle_err;
 
-pub(super) fn whether_base64_encoded(headers: &HeaderMap) -> bool {
+pub(super) fn whether_should_base64_encode(headers: &HeaderMap) -> bool {
     let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -33,8 +33,8 @@ pub(super) fn whether_base64_encoded(headers: &HeaderMap) -> bool {
     }
 }
 
-pub(super) fn transform_body(is_base64_encoded: bool, body: Bytes) -> String {
-    if is_base64_encoded {
+pub(super) fn transform_body(should_base64_encode: bool, body: Bytes) -> String {
+    if should_base64_encode {
         BASE64_STANDARD.encode(body)
     } else {
         String::from_utf8_lossy(&body).to_string()

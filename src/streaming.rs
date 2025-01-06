@@ -172,4 +172,18 @@ mod tests {
         assert!(detect_metadata(b"{\"statusCode\":200,\"headers\":{}}"));
         assert!(!detect_metadata(b"Hello, world!"));
     }
+
+    #[test]
+    fn test_try_parse_metadata() {
+        // incomplete
+        assert!(try_parse_metadata(b"{\"statusCod").is_none());
+        assert!(try_parse_metadata(b"{\"statusCode\":200,\"headers\":{}}\0\0\0").is_none());
+
+        // complete
+        let (metadata_prelude, remaining) =
+            try_parse_metadata(b"{\"statusCode\":200,\"headers\":{}}\0\0\0\0\0\0\0\0Hello, world!").unwrap();
+        assert_eq!(metadata_prelude.status_code, StatusCode::OK);
+        assert_eq!(metadata_prelude.headers.len(), 0);
+        assert_eq!(remaining, b"Hello, world!");
+    }
 }

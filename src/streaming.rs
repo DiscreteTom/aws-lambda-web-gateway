@@ -3,7 +3,6 @@ use aws_sdk_lambda::{
     operation::invoke_with_response_stream::InvokeWithResponseStreamOutput,
     types::{InvokeResponseStreamUpdate, InvokeWithResponseStreamResponseEvent},
 };
-use aws_smithy_types::Blob;
 use axum::{
     body::Body,
     http::{HeaderMap, StatusCode},
@@ -31,8 +30,6 @@ struct MetadataPrelude {
 }
 
 pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStreamOutput) -> Response {
-    let (tx, rx) = mpsc::channel(1);
-
     let Some(PayloadChunk(InvokeResponseStreamUpdate {
         payload: Some(first_chunk),
         ..
@@ -57,35 +54,6 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
         (None, buffer)
     };
 
-    // Spawn task to handle remaining stream
-    tokio::spawn(async move {
-        // Send remaining data after metadata first
-        if !buffer.is_empty() {
-            let stream_update = InvokeResponseStreamUpdate::builder().payload(Blob::new(buffer)).build();
-            tx.send(PayloadChunk(stream_update)).await.ok();
-        }
-
-        while let Ok(Some(event)) = resp.event_stream.recv().await {
-            tx.send(event).await.ok();
-        }
-    });
-
-    let stream = ReceiverStream::new(rx).map(|event| match event {
-        PayloadChunk(chunk) => {
-            if let Some(data) = chunk.payload {
-                let bytes = data.into_inner();
-                Ok::<_, Infallible>(Bytes::from(bytes))
-            } else {
-                Ok(Bytes::default())
-            }
-        }
-        InvokeComplete(_) => Ok(Bytes::default()),
-        _ => {
-            tracing::warn!("Unhandled event type: {:?}", event);
-            Ok(Bytes::default())
-        }
-    });
-
     let mut resp_builder = Response::builder();
 
     if let Some(metadata_prelude) = metadata_prelude {
@@ -106,7 +74,42 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
         resp_builder = resp_builder.header("content-type", "application/octet-stream");
     }
 
-    handle_err!("Building response", resp_builder.body(Body::from_stream(stream)))
+    // Spawn task to handle remaining stream
+    let (tx, rx) = mpsc::channel(1);
+    tokio::spawn(async move {
+        // Send remaining data after metadata first
+        if !buffer.is_empty() {
+            tx.send(buffer).await.ok();
+        }
+
+        // TODO: handle error
+        while let Ok(Some(event)) = resp.event_stream.recv().await {
+            match event {
+                PayloadChunk(chunk) => {
+                    if let Some(data) = chunk.payload {
+                        tx.send(data.into_inner()).await.ok();
+                    }
+                    // else, no data in the chunk, just ignore
+                }
+                InvokeComplete(_) => {
+                    break;
+                }
+                _ => {
+                    tracing::warn!("Unhandled event type: {:?}", event);
+                }
+            }
+        }
+    });
+
+    handle_err!(
+        "Building response",
+        resp_builder.body(Body::from_stream(ReceiverStream::new(rx).map(|bytes| Ok::<
+            _,
+            Infallible,
+        >(
+            Bytes::from(bytes)
+        ))))
+    )
 }
 
 fn detect_metadata(bytes: &[u8]) -> bool {

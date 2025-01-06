@@ -30,42 +30,45 @@ struct MetadataPrelude {
 }
 
 pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStreamOutput) -> Response {
-    let Some(PayloadChunk(InvokeResponseStreamUpdate {
-        payload: Some(first_chunk),
-        ..
-    })) = handle_err!("Receiving response stream", resp.event_stream.recv().await)
-    else {
-        // TODO: correct the response if there is no chunk
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .unwrap();
-    };
-    let mut buffer = first_chunk.into_inner();
+    // collect metadata
+    let (metadata, buffer) = {
+        let mut buffer = vec![];
+        loop {
+            let next = handle_err!("Receiving response stream", resp.event_stream.recv().await);
+            if let Some(PayloadChunk(InvokeResponseStreamUpdate {
+                payload: Some(data), ..
+            })) = next
+            {
+                buffer.extend_from_slice(&data.into_inner());
 
-    // Detect and collect metadata prelude
-    let (metadata_prelude, buffer) = if detect_metadata(&buffer) {
-        if let Some((metadata_prelude, rest)) = collect_metadata(&mut resp, &mut buffer).await {
-            (Some(metadata_prelude), rest)
-        } else {
-            (None, buffer)
+                // actually this is only required for the first chunk
+                // but this is cheap, so we call it in the loop to simplify the flow
+                if !detect_metadata(&buffer) {
+                    break (None, buffer);
+                }
+
+                if let Some((prelude, remaining)) = try_parse_metadata(&mut buffer) {
+                    break (Some(prelude), remaining.into());
+                }
+            } else {
+                // no more chunks
+                break (None, buffer);
+            }
         }
-    } else {
-        (None, buffer)
     };
 
     let mut resp_builder = Response::builder();
 
-    if let Some(metadata_prelude) = metadata_prelude {
-        resp_builder = resp_builder.status(metadata_prelude.status_code);
+    if let Some(metadata) = metadata {
+        resp_builder = resp_builder.status(metadata.status_code);
 
         {
             let headers = resp_builder.headers_mut().unwrap();
-            *headers = metadata_prelude.headers;
+            *headers = metadata.headers;
             headers.remove("content-length");
         }
 
-        for cookie in &metadata_prelude.cookies {
+        for cookie in &metadata.cookies {
             resp_builder = resp_builder.header("set-cookie", cookie);
         }
     } else {
@@ -112,34 +115,9 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
     )
 }
 
+#[inline]
 fn detect_metadata(bytes: &[u8]) -> bool {
     bytes.get(0) == Some(&b'{')
-}
-
-/// Return metadata prelude and remaining data if metadata is complete.
-/// Return [`None`] if the stream is exhausted without complete metadata.
-async fn collect_metadata(
-    resp: &mut InvokeWithResponseStreamOutput,
-    metadata_buffer: &mut Vec<u8>,
-) -> Option<(MetadataPrelude, Vec<u8>)> {
-    // Process the metadata_buffer first
-    if let Some((prelude, remaining)) = try_parse_metadata(metadata_buffer) {
-        return Some((prelude, remaining.into()));
-    }
-
-    // If metadata is not complete, continue processing the stream
-    // TODO: handle error
-    while let Ok(Some(PayloadChunk(InvokeResponseStreamUpdate {
-        payload: Some(data), ..
-    }))) = resp.event_stream.recv().await
-    {
-        let bytes = data.into_inner();
-        metadata_buffer.extend_from_slice(&bytes);
-        if let Some((prelude, remaining)) = try_parse_metadata(metadata_buffer) {
-            return Some((prelude, remaining.into()));
-        }
-    }
-    None
 }
 
 /// If metadata prelude is found, return the metadata prelude and the remaining data.

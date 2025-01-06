@@ -10,7 +10,6 @@ use axum::{
 };
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use InvokeWithResponseStreamResponseEvent::*;
@@ -57,30 +56,43 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
         }
     };
 
-    let resp_builder = create_response_builder(metadata);
+    let builder = create_response_builder(metadata);
 
     // Spawn task to handle remaining stream
     let (tx, rx) = mpsc::channel(1);
     tokio::spawn(async move {
         // Send remaining data after metadata first
         if !buffer.is_empty() {
-            tx.send(buffer).await.ok();
+            tx.send(Ok(buffer)).await.ok();
         }
 
-        // TODO: handle error
-        while let Ok(Some(event)) = resp.event_stream.recv().await {
-            match event {
-                PayloadChunk(chunk) => {
-                    if let Some(data) = chunk.payload {
-                        tx.send(data.into_inner()).await.ok();
+        loop {
+            match resp.event_stream.recv().await {
+                Err(e) => {
+                    tx.send(Err(e)).await.ok();
+                }
+                Ok(e) => {
+                    if let Some(update) = e {
+                        match update {
+                            PayloadChunk(chunk) => {
+                                if let Some(data) = chunk.payload {
+                                    let bytes = data.into_inner();
+                                    if !bytes.is_empty() {
+                                        tx.send(Ok(bytes)).await.ok();
+                                    }
+                                }
+                                // else, no data in the chunk, just ignore
+                            }
+                            InvokeComplete(_) => {
+                                break;
+                            }
+                            _ => {
+                                tracing::warn!("Unhandled event type: {:?}", update);
+                            }
+                        }
+                    } else {
+                        break;
                     }
-                    // else, no data in the chunk, just ignore
-                }
-                InvokeComplete(_) => {
-                    break;
-                }
-                _ => {
-                    tracing::warn!("Unhandled event type: {:?}", event);
                 }
             }
         }
@@ -88,12 +100,9 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
 
     handle_err!(
         "Building response",
-        resp_builder.body(Body::from_stream(ReceiverStream::new(rx).map(|bytes| Ok::<
-            _,
-            Infallible,
-        >(
-            Bytes::from(bytes)
-        ))))
+        builder.body(Body::from_stream(
+            ReceiverStream::new(rx).map(|res| res.map(|bytes| Bytes::from(bytes)))
+        ))
     )
 }
 

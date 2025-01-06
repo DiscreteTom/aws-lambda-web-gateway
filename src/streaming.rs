@@ -170,4 +170,36 @@ mod tests {
         assert_eq!(metadata_prelude.headers.len(), 0);
         assert_eq!(remaining, b"Hello, world!");
     }
+
+    #[test]
+    fn test_create_response_builder() {
+        let metadata = MetadataPrelude {
+            status_code: StatusCode::INTERNAL_SERVER_ERROR,
+            headers: {
+                let mut headers = HeaderMap::new();
+                headers.insert("content-type", "text/plain".parse().unwrap());
+                headers.insert("content-length", "0".parse().unwrap());
+                headers
+            },
+            cookies: vec!["cookie1".to_string(), "cookie2".to_string()],
+        };
+        let builder = create_response_builder(Some(metadata));
+        let response = builder.body(Body::empty()).unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
+        assert_eq!(response.headers().get("content-length"), None);
+        assert_eq!(
+            response.headers().get_all("set-cookie").iter().collect::<Vec<_>>(),
+            &["cookie1", "cookie2"]
+        );
+
+        let builder = create_response_builder(None);
+        let response = builder.body(Body::empty()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(response.headers().get("content-length"), None);
+    }
 }

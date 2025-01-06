@@ -5,7 +5,7 @@ use aws_sdk_lambda::{
 };
 use axum::{
     body::Body,
-    http::{HeaderMap, StatusCode},
+    http::{response::Builder, HeaderMap, StatusCode},
     response::Response,
 };
 use bytes::Bytes;
@@ -57,25 +57,7 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
         }
     };
 
-    let mut resp_builder = Response::builder();
-
-    if let Some(metadata) = metadata {
-        resp_builder = resp_builder.status(metadata.status_code);
-
-        {
-            let headers = resp_builder.headers_mut().unwrap();
-            *headers = metadata.headers;
-            headers.remove("content-length");
-        }
-
-        for cookie in &metadata.cookies {
-            resp_builder = resp_builder.header("set-cookie", cookie);
-        }
-    } else {
-        // Default response if no metadata
-        resp_builder = resp_builder.status(StatusCode::OK);
-        resp_builder = resp_builder.header("content-type", "application/octet-stream");
-    }
+    let resp_builder = create_response_builder(metadata);
 
     // Spawn task to handle remaining stream
     let (tx, rx) = mpsc::channel(1);
@@ -139,6 +121,30 @@ fn try_parse_metadata(buffer: &[u8]) -> Option<(MetadataPrelude, &[u8])> {
         }
     }
     None
+}
+
+fn create_response_builder(metadata: Option<MetadataPrelude>) -> Builder {
+    if let Some(metadata) = metadata {
+        let mut builder = Response::builder().status(metadata.status_code);
+
+        // apply all headers except content-length
+        {
+            let headers = builder.headers_mut().unwrap();
+            *headers = metadata.headers;
+            headers.remove("content-length");
+        }
+
+        for cookie in &metadata.cookies {
+            builder = builder.header("set-cookie", cookie);
+        }
+
+        builder
+    } else {
+        // Default response if no metadata
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/octet-stream")
+    }
 }
 
 #[cfg(test)]

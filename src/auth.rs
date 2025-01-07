@@ -47,12 +47,15 @@ mod tests {
         headers.insert("x-api-key", "test".parse().unwrap());
         assert!(is_authorized(&headers, &config));
 
+        let mut headers = HeaderMap::new();
         headers.insert("x-api-key", "invalid".parse().unwrap());
         assert!(!is_authorized(&headers, &config));
 
+        let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer test".parse().unwrap());
         assert!(is_authorized(&headers, &config));
 
+        let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer invalid".parse().unwrap());
         assert!(!is_authorized(&headers, &config));
     }

@@ -70,6 +70,6 @@ mod tests {
         assert_eq!(transform_body(false, body.clone()), "Hello, world!");
 
         let base64_body = Bytes::from(BASE64_STANDARD.encode(&body));
-        assert_eq!(transform_body(true, base64_body), body);
+        assert_eq!(transform_body(true, body), base64_body);
     }
 }

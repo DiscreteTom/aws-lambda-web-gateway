@@ -46,7 +46,7 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
                     break (None, buffer);
                 }
 
-                if let Some((prelude, remaining)) = try_parse_metadata(&mut buffer) {
+                if let Some((prelude, remaining)) = try_parse_metadata(&buffer) {
                     break (Some(prelude), remaining.into());
                 }
             } else {
@@ -101,14 +101,14 @@ pub(super) async fn handle_streaming_response(mut resp: InvokeWithResponseStream
     handle_err!(
         "Building response",
         builder.body(Body::from_stream(
-            ReceiverStream::new(rx).map(|res| res.map(|bytes| Bytes::from(bytes)))
+            ReceiverStream::new(rx).map(|res| res.map(Bytes::from))
         ))
     )
 }
 
 #[inline]
 fn detect_metadata(bytes: &[u8]) -> bool {
-    bytes.get(0) == Some(&b'{')
+    bytes.first() == Some(&b'{')
 }
 
 /// If metadata prelude is found, return the metadata prelude and the remaining data.
